@@ -5,19 +5,19 @@ import { cn } from "@/lib/utils";
 import { ScrollArea } from "@radix-ui/react-scroll-area";
 import { Copy, Download, StopCircle, ThumbsDown, ThumbsUp } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
-
-interface Message {
-  role: "agent" | "user";
-  content: string;
-  timestamp: string;
-}
+import { useChat } from "@ai-sdk/react";
+import { useRouter } from "next/navigation";
 
 const Chat = () => {
+  const { messages, status, append } = useChat();
+  const router = useRouter();
+
   const recognitionRef = useRef<SpeechRecognition>(null);
 
-  const [messages, setMessages] = useState<Message[]>([]);
   const [isActive, setIsActive] = useState<boolean>(false);
   const [voices, setVoices] = useState<Array<SpeechSynthesisVoice>>();
+
+  const prevLastMsg = useRef<string | null>(null);
 
   const language = "es-ES";
 
@@ -41,14 +41,64 @@ const Chat = () => {
     }
   }, []);
 
+  useEffect(() => {
+    const lastAIMessage = messages.findLast(
+      (message) => message.role === "assistant"
+    );
+
+    if (
+      prevLastMsg.current !== lastAIMessage?.id &&
+      lastAIMessage &&
+      status === "ready"
+    ) {
+      prevLastMsg.current = lastAIMessage.id;
+      speak(lastAIMessage.content);
+
+      const toolInvocation =
+        lastAIMessage.parts[0].type === "tool-invocation" &&
+        lastAIMessage.parts[0];
+
+      console.log(toolInvocation);
+
+      if (toolInvocation) {
+        if (toolInvocation.toolInvocation.toolName === "seeAllProjects")
+          router.push("/projects");
+
+        if (toolInvocation.toolInvocation.toolName === "seeProject")
+          router.push(`/projects/${toolInvocation.toolInvocation.args.name}`);
+
+        if (toolInvocation.toolInvocation.toolName === "createProject") {
+          const result = prompt(
+            `Descripción del proyecto con el nombre ${toolInvocation.toolInvocation.args.name}`
+          );
+          router.push(
+            `/projects/${toolInvocation.toolInvocation.args.name}?description=${result}`
+          );
+        }
+      }
+    }
+  }, [status]);
+
+  console.log(messages);
+
+  function speak(text: string) {
+    console.log({ text });
+
+    const utterance = new SpeechSynthesisUtterance(text);
+
+    if (activeVoice) {
+      utterance.voice = activeVoice;
+    }
+
+    window.speechSynthesis.speak(utterance);
+  }
+
   function handleOnRecord() {
     if (isActive) {
       recognitionRef.current?.stop();
       setIsActive(false);
       return;
     }
-
-    speak(" ");
 
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -63,46 +113,16 @@ const Chat = () => {
     };
 
     recognitionRef.current.onresult = async function (event) {
-      const transcript = event.results[0][0].transcript;
+      const userText = event.results[0][0].transcript;
 
-      /*   const results = await fetch("/api/translate", {
-        method: "POST",
-        body: JSON.stringify({
-          text: transcript,
-          language: "pt-BR",
-        }),
-      }).then((r) => r.json()); */
-
-      const answer =
-        "Esta es la respuesta a tu pregunta, llena este formulario....";
-
-      speak(answer);
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "user",
-          content: transcript,
-          timestamp: new Date().toLocaleTimeString(),
-        },
-        {
-          role: "agent",
-          content: answer,
-          timestamp: new Date().toLocaleTimeString(),
-        },
-      ]);
+      append({
+        role: "user",
+        content: userText,
+        createdAt: new Date(),
+      });
     };
 
     recognitionRef.current.start();
-  }
-
-  function speak(text: string) {
-    const utterance = new SpeechSynthesisUtterance(text);
-
-    if (activeVoice) {
-      utterance.voice = activeVoice;
-    }
-
-    window.speechSynthesis.speak(utterance);
   }
 
   return (
@@ -117,24 +137,30 @@ const Chat = () => {
                 message.role === "user" && "ml-auto"
               )}
             >
-              {message.role === "agent" && (
+              {message.role === "assistant" && (
                 <div className="h-8 w-8 rounded-full bg-primary flex-shrink-0" />
               )}
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium">
-                    {message.role === "agent" ? "GenerativeAgent" : "G5"}
+                    {message.role === "assistant" ? "AI" : "Usuario"}
                   </span>
                   <span className="text-sm text-muted-foreground">
-                    {message.timestamp}
+                    {message.createdAt?.toLocaleTimeString()}
                   </span>
                 </div>
                 <div className="p-3 bg-muted/50 rounded-lg">
-                  <p className="text-sm whitespace-pre-wrap">
+                  <div className="text-sm whitespace-pre-wrap">
                     {message.content}
-                  </p>
+
+                    {message.parts ? (
+                      <pre>{JSON.stringify(message.parts, null, 2)}</pre>
+                    ) : (
+                      <p>{message.content}</p>
+                    )}
+                  </div>
                 </div>
-                {message.role === "agent" && (
+                {message.role === "assistant" && (
                   <div className="flex items-center gap-2">
                     <Button variant="ghost" size="icon" className="h-8 w-8">
                       <Copy className="h-4 w-4" />
